@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: rodem-order-one
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: DATABASE_PATH
+        value: /tmp/rodem_order_one.db
