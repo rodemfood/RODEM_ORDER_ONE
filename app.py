@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, make_response, redirect, render_template, request, send_file
+from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import Column, Integer, String, Text, create_engine, select, update
 from sqlalchemy.orm import declarative_base, sessionmaker
 import xlwt
@@ -14,20 +15,55 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 BASE_DIR = Path(__file__).resolve().parent
-DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{BASE_DIR / 'data' / 'rodem_order_one.db'}")
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
-elif DATABASE_URL.startswith("postgresql://") and "+psycopg" not in DATABASE_URL:
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 
-engine_kwargs = {"pool_pre_ping": True}
-if DATABASE_URL.startswith("sqlite"):
-    engine_kwargs["connect_args"] = {"check_same_thread": False}
-engine = create_engine(DATABASE_URL, **engine_kwargs)
+# 운영 환경에서는 Render의 DATABASE_URL(PostgreSQL)을 사용합니다.
+# DATABASE_URL이 아직 연결되지 않은 경우에도 배포가 실패하지 않도록
+# 테스트 전용 SQLite를 /tmp에 생성합니다. /tmp 데이터는 재시작 시 사라집니다.
+RAW_DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USING_POSTGRES = False
+DATABASE_FALLBACK_REASON = ""
+
+def normalize_database_url(raw_url):
+    url = (raw_url or "").strip()
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+psycopg://", 1)
+    if url.startswith("postgresql://") and "+psycopg" not in url:
+        return url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return url
+
+def build_engine():
+    global USING_POSTGRES, DATABASE_FALLBACK_REASON
+    candidates = []
+    normalized = normalize_database_url(RAW_DATABASE_URL)
+    if normalized:
+        candidates.append((normalized, True))
+    candidates.append(("sqlite:////tmp/rodem_order_one.db", False))
+
+    last_error = None
+    for url, is_postgres in candidates:
+        try:
+            kwargs = {"pool_pre_ping": True}
+            if url.startswith("sqlite"):
+                kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
+            else:
+                kwargs.update({"pool_recycle": 300, "pool_size": 5, "max_overflow": 5})
+            candidate = create_engine(url, **kwargs)
+            with candidate.connect() as conn:
+                conn.exec_driver_sql("SELECT 1")
+            USING_POSTGRES = is_postgres
+            if last_error:
+                DATABASE_FALLBACK_REASON = clean_text(str(last_error), 300) if "clean_text" in globals() else str(last_error)[:300]
+            return candidate
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(f"데이터베이스를 초기화할 수 없습니다: {last_error}")
+
+engine = build_engine()
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base = declarative_base()
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 app.config["JSON_AS_ASCII"] = False
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024
 
@@ -63,7 +99,20 @@ class Order(Base):
     invoiced_at = Column(String(19), default="")
 
 
-Base.metadata.create_all(engine)
+try:
+    Base.metadata.create_all(engine)
+except Exception as exc:
+    # 외부 DB가 일시적으로 실패해도 Render 배포 자체가 중단되지 않도록 /tmp SQLite로 자동 전환합니다.
+    DATABASE_FALLBACK_REASON = str(exc)[:300]
+    USING_POSTGRES = False
+    engine.dispose()
+    engine = create_engine(
+        "sqlite:////tmp/rodem_order_one.db",
+        pool_pre_ping=True,
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+    SessionLocal.configure(bind=engine)
+    Base.metadata.create_all(engine)
 
 
 def now_text():
@@ -130,7 +179,14 @@ def home():
 
 @app.get("/health")
 def health():
-    return jsonify(ok=True, service="RODEM ORDER ONE", time=now_text())
+    return jsonify(
+        ok=True,
+        service="RODEM ORDER ONE",
+        database="postgresql" if USING_POSTGRES else "temporary-sqlite",
+        persistent=USING_POSTGRES,
+        time=now_text(),
+        fallback_reason=DATABASE_FALLBACK_REASON,
+    )
 
 
 @app.get("/order")

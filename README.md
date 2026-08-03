@@ -1,22 +1,29 @@
-# RODEM ORDER ONE v1.3
+# RODEM ORDER ONE v2.1 SAFE RENDER
 
-고객용 모바일 UI를 전면 개선한 배포판입니다.
+Render 무료 Web Service에 그대로 업로드하여 실행하는 안전형 테스트 버전입니다.
 
-- 최초 1회 배송지 등록
-- 동일 기기 재접속 시 저장 정보 자동 표시
-- 배송지 정보 수정
-- Kakao 주소 검색 및 우편번호 자동 저장
-- 기본 5개 주문 행, 최대 8개까지 추가
-- 수량 +/- 조절과 직접 입력
-- 주문 합계 실시간 표시
-- 최근 주문 내역 조회
-- 직원용 로젠 송장 생성 기능 유지
+## 주소
+- 고객 모바일 주문: `/order`
+- 직원 PC 관리: `/staff`
+- 서버 상태 확인: `/health`
 
-고객: `/order`
-직원: `/staff`
+## 저장 방식
+- `DATABASE_URL`이 없으면 Render의 쓰기 가능한 `/tmp/rodem_order_one.db`를 사용합니다.
+- 따라서 별도의 `data` 폴더가 없어도 배포 오류가 발생하지 않습니다.
+- 무료 테스트 중 서버 재시작 또는 재배포 시 주문 데이터가 초기화될 수 있습니다.
+- 나중에 Supabase PostgreSQL의 연결 주소를 Render 환경변수 `DATABASE_URL`에 넣으면 코드 변경 없이 영구 저장으로 전환됩니다.
 
+## GitHub 업로드
+압축을 푼 폴더 안의 파일과 `templates` 폴더를 모두 GitHub 저장소에 업로드하고 Commit 합니다.
 
-## v1.3 변경사항
-- 직원관리 화면을 PC 전용 가로형 대시보드로 개편
-- 1024px 미만 모바일/태블릿 접속 시 PC 이용 안내만 표시
-- 고객용 모바일 주문 화면과 기존 API/로젠 엑셀 기능 유지
+## Render 설정
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120`
+- Instance Type: Free
+
+## 정상 확인
+배포 후 `/health`를 열었을 때 다음과 비슷하게 나오면 정상입니다.
+
+```json
+{"ok":true,"database":"temporary-sqlite","persistent":false}
+```
