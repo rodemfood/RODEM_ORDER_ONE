@@ -11,7 +11,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import Column, Integer, String, Text, create_engine, select, update
 from sqlalchemy.orm import declarative_base, sessionmaker
 import xlwt
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -65,7 +65,7 @@ Base = declarative_base()
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 app.config["JSON_AS_ASCII"] = False
-app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
 
 class Customer(Base):
@@ -458,6 +458,267 @@ def export_backup():
         output, as_attachment=True,
         download_name=f"RODEM_ORDER_BACKUP_{datetime.now():%Y%m%d_%H%M}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# 거래처가 자체 양식으로 보낸 엑셀 발주서를 로젠 업로드 형식으로 변환합니다.
+HEADER_ALIASES = {
+    "receiver": ["수화주명", "받는분", "받는 분", "수령인", "수취인", "배송처", "점포명", "매장명"],
+    "mobile": ["휴대폰", "휴대전화", "핸드폰", "연락처", "휴대폰번호"],
+    "phone": ["전화", "전화번호", "일반전화"],
+    "postal": ["우편번호", "우편 번호", "우편"],
+    "address": ["주소", "배송지", "배송주소", "배송지주소"],
+    "product": ["물품명", "상품명", "제품명", "품목명", "주문상품"],
+    "qty": ["주문수량", "총수량", "수량", "주문 수량"],
+    "company": ["주문자명", "업체명", "거래처명", "발주처"],
+    "memo": ["배송메시지", "배송 요청사항", "요청사항", "비고"],
+}
+
+
+def normalized_header(value):
+    return re.sub(r"[\s_\-./()]", "", clean_text(value, 80)).lower()
+
+
+def find_header_map(ws):
+    aliases = {key: {normalized_header(v) for v in values} for key, values in HEADER_ALIASES.items()}
+    best = None
+    for row_idx in range(1, min(ws.max_row, 25) + 1):
+        found = {}
+        for col_idx in range(1, min(ws.max_column, 80) + 1):
+            value = ws.cell(row_idx, col_idx).value
+            key_text = normalized_header(value)
+            if not key_text:
+                continue
+            for key, names in aliases.items():
+                if key_text in names and key not in found:
+                    found[key] = col_idx
+        score = sum(k in found for k in ("receiver", "address", "product", "qty"))
+        if score >= 3 and (best is None or score > best[0]):
+            best = (score, row_idx, found)
+    return (best[1], best[2]) if best else (None, {})
+
+
+def excel_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return clean_text(value, 500)
+
+
+def excel_qty(value):
+    if value is None or value == "":
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    match = re.search(r"-?\d+(?:\.\d+)?", str(value).replace(",", ""))
+    return int(float(match.group())) if match else 0
+
+
+def clean_import_product(value):
+    name = excel_text(value).replace("#", "").strip()
+    # 거래처 발주서의 포장규격 표기는 제거하고 실제 상품명만 송장에 표시합니다.
+    name = re.sub(r"\s+\d+(?:\.\d+)?\s*(?:g|kg|ml|l)\s*\d+\s*개\s*$", "", name, flags=re.I)
+    name = re.sub(r"\s+\d+\s*입\s*$", "", name)
+    return name.strip()
+
+
+def load_excel_workbook(upload):
+    filename = (upload.filename or "").lower()
+    raw = upload.read()
+    if not raw:
+        raise ValueError("빈 파일입니다.")
+    if filename.endswith((".xlsx", ".xlsm")):
+        return load_workbook(io.BytesIO(raw), data_only=True, read_only=False)
+    if filename.endswith(".xls"):
+        try:
+            import xlrd
+        except ImportError as exc:
+            raise ValueError("구형 .xls 파일을 읽는 구성요소가 없습니다.") from exc
+        book = xlrd.open_workbook(file_contents=raw)
+        # openpyxl과 동일한 최소 인터페이스로 변환합니다.
+        temp = Workbook()
+        temp.remove(temp.active)
+        for sheet in book.sheets():
+            ws = temp.create_sheet(sheet.name[:31])
+            for r in range(sheet.nrows):
+                for c in range(sheet.ncols):
+                    ws.cell(r + 1, c + 1, sheet.cell_value(r, c))
+        return temp
+    raise ValueError(".xlsx, .xlsm 또는 .xls 파일만 업로드할 수 있습니다.")
+
+
+def parse_order_workbook(upload):
+    wb = load_excel_workbook(upload)
+    grouped = {}
+    warnings = []
+    recognized_sheets = []
+    image_sheets = []
+
+    for ws in wb.worksheets:
+        image_count = len(getattr(ws, "_images", []))
+        if image_count:
+            image_sheets.append(f"{ws.title}({image_count}개 이미지)")
+        header_row, columns = find_header_map(ws)
+        if not header_row:
+            if image_count:
+                continue
+            nonempty = sum(1 for row in ws.iter_rows(values_only=True) for v in row if v not in (None, ""))
+            if nonempty:
+                warnings.append(f"'{ws.title}' 탭은 표 머리글을 인식하지 못해 제외했습니다.")
+            continue
+
+        recognized_sheets.append(ws.title)
+        for row_idx in range(header_row + 1, ws.max_row + 1):
+            def val(key):
+                col = columns.get(key)
+                return ws.cell(row_idx, col).value if col else None
+
+            product = clean_import_product(val("product"))
+            qty = excel_qty(val("qty"))
+            receiver = excel_text(val("receiver"))
+            if product in ("합계", "총계", "소계") or not product or qty <= 0:
+                continue
+
+            mobile = excel_text(val("mobile"))
+            phone = excel_text(val("phone"))
+            contact = mobile or phone
+            postal = excel_text(val("postal"))
+            address = excel_text(val("address"))
+            company = excel_text(val("company")) or ws.title
+            memo = excel_text(val("memo"))
+
+            # 같은 수화주의 여러 상품행은 로젠 송장 한 줄로 묶습니다.
+            key = (ws.title, receiver, contact, address, postal, company, memo)
+            if key not in grouped:
+                grouped[key] = {
+                    "source_sheet": ws.title,
+                    "company": company,
+                    "receiver": receiver,
+                    "phone": contact,
+                    "postal_code": postal,
+                    "address": address,
+                    "memo": memo,
+                    "items": [],
+                }
+            grouped[key]["items"].append({"name": product, "qty": qty})
+
+    rows = []
+    for index, row in enumerate(grouped.values(), start=1):
+        errors = []
+        notices = []
+        if not row["receiver"]:
+            errors.append("받는 분 누락")
+        if not row["phone"]:
+            errors.append("연락처 누락")
+        if not row["address"]:
+            errors.append("주소 누락")
+        if not row["postal_code"]:
+            notices.append("우편번호 없음")
+        row["row_id"] = index
+        row["total_qty"] = sum(int(i["qty"]) for i in row["items"])
+        row["logen_product"] = logen_product_text(row["items"])
+        row["valid"] = not errors
+        row["errors"] = errors
+        row["notices"] = notices
+        rows.append(row)
+
+    if image_sheets:
+        warnings.append("이미지로만 구성된 탭은 자동 변환하지 않았습니다: " + ", ".join(image_sheets))
+    if not rows:
+        raise ValueError("자동 변환할 수 있는 주문 데이터를 찾지 못했습니다.")
+    return {
+        "rows": rows,
+        "recognized_sheets": recognized_sheets,
+        "warnings": warnings,
+        "summary": {
+            "total": len(rows),
+            "valid": sum(1 for r in rows if r["valid"]),
+            "error": sum(1 for r in rows if not r["valid"]),
+            "total_qty": sum(r["total_qty"] for r in rows if r["valid"]),
+        },
+    }
+
+
+@app.post("/api/staff/import-excel")
+def import_partner_excel():
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        return jsonify(error="변환할 엑셀 파일을 선택해 주세요."), 400
+    try:
+        result = parse_order_workbook(upload)
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    except Exception as exc:
+        app.logger.exception("거래처 발주서 변환 실패")
+        return jsonify(error=f"엑셀 파일을 읽는 중 오류가 발생했습니다: {clean_text(exc, 200)}"), 400
+
+
+@app.post("/api/staff/export-imported-logen")
+def export_imported_logen():
+    data = request.get_json(silent=True) or {}
+    rows = data.get("rows") or []
+    selected = []
+    for row in rows[:5000]:
+        if not row.get("selected", True) or not row.get("valid", False):
+            continue
+        items = []
+        for item in (row.get("items") or [])[:100]:
+            name = clean_import_product(item.get("name"))
+            qty = excel_qty(item.get("qty"))
+            if name and qty > 0:
+                items.append({"name": name, "qty": qty})
+        receiver = clean_text(row.get("receiver"), 100)
+        phone = clean_phone(row.get("phone"))
+        address = clean_text(row.get("address"), 300)
+        if not receiver or not phone or not address or not items:
+            continue
+        selected.append({
+            "receiver": receiver,
+            "phone": phone,
+            "postal_code": clean_text(row.get("postal_code"), 20),
+            "address": address,
+            "company": clean_text(row.get("company"), 100),
+            "memo": clean_text(row.get("memo"), 500),
+            "items": items,
+        })
+    if not selected:
+        return jsonify(error="정상 변환된 주문을 한 건 이상 선택해 주세요."), 400
+
+    wb = xlwt.Workbook(encoding="utf-8")
+    ws = wb.add_sheet("Sheet4")
+    headers = [
+        "수화주명", "전화번호", "휴대폰", "우편번호", "주소", "상품명",
+        "박스수량", "배송메시지", "선착분", "운임", "", "주문자명"
+    ]
+    header_style = xlwt.easyxf(
+        "font: bold on, color white; pattern: pattern solid, fore_colour green;"
+        "align: horiz center, vert center; borders: left thin, right thin, top thin, bottom thin;"
+    )
+    cell_style = xlwt.easyxf(
+        "align: vert top, wrap on; borders: left thin, right thin, top thin, bottom thin;"
+    )
+    for col, header in enumerate(headers):
+        ws.write(0, col, header, header_style)
+    widths = [18, 18, 18, 12, 50, 70, 10, 40, 10, 10, 5, 22]
+    for i, width in enumerate(widths):
+        ws.col(i).width = width * 256
+    for r, row in enumerate(selected, start=1):
+        values = [
+            row["receiver"], row["phone"], row["phone"], row["postal_code"],
+            row["address"], logen_product_text(row["items"]), 1, row["memo"],
+            "", "", "", row["company"],
+        ]
+        for c, value in enumerate(values):
+            ws.write(r, c, value, cell_style)
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return send_file(
+        output, as_attachment=True,
+        download_name=f"RODEM_PARTNER_LOGEN_{datetime.now():%Y%m%d_%H%M}.xls",
+        mimetype="application/vnd.ms-excel",
     )
 
 
