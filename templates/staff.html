@@ -1,15 +1,76 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#188754"><title>RODEM ORDER ONE 직원관리</title><style>
-:root{--green:#188754;--green2:#0d6b45;--ink:#172033;--muted:#667085;--line:#d6e5dc}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top right,#dff3e8,#f5f9f7 44%);font-family:Arial,'Noto Sans KR',sans-serif;color:var(--ink)}button{font-family:inherit}.app{max-width:1500px;margin:auto;min-height:100vh}.top{padding:24px 20px;background:linear-gradient(135deg,#0b4b31,#188754 62%,#5abd86);color:#fff;box-shadow:0 8px 27px #0d6b4533}.brand{font-size:31px;font-weight:1000}.sub{font-size:18px;margin-top:7px}.badge{display:inline-block;margin-top:12px;padding:8px 14px;border:1px solid #ffffff55;border-radius:999px;background:#ffffff25;font-size:17px;font-weight:900}.wrap{padding:16px}.card{background:#fff;border-radius:21px;padding:20px;margin-bottom:15px;box-shadow:0 12px 32px #146b4317}.title{font-size:26px;font-weight:1000;color:#0e5d3c}.desc{font-size:16px;color:var(--muted);margin-top:6px}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:13px}.stat{padding:18px;border:2px solid #dcebe2;border-radius:17px;background:linear-gradient(180deg,#fff,#f5fbf7)}.stat span{display:block;color:var(--muted);font-weight:800}.stat b{display:block;font-size:33px;color:#0f7449;margin-top:8px}.toolbar{display:flex;gap:10px;flex-wrap:wrap}.btn{border:1px solid #b9d7c5;background:#fff;color:#155c3e;border-radius:13px;padding:13px 16px;font-size:16px;font-weight:900;cursor:pointer}.btn.main{background:linear-gradient(135deg,#2dac6d,#188754);border:0;color:#fff}.btn.warn{color:#8a5700;border-color:#e9d29c;background:#fffaf0}.tablewrap{overflow:auto;border:1px solid #dce8e0;border-radius:15px}table{border-collapse:collapse;width:100%;min-width:1260px}th,td{padding:12px;border-bottom:1px solid #e5ede8;text-align:left;vertical-align:top;font-size:14px}th{position:sticky;top:0;background:#edf8f1;color:#145b3d;z-index:1}.status{display:inline-block;padding:6px 9px;border-radius:999px;font-size:12px;font-weight:900}.status.new{background:#fff2c7;color:#815d00}.status.done{background:#ddf4e6;color:#126a40}.empty{text-align:center;padding:38px;color:var(--muted)}.logen{font-family:Consolas,monospace;font-size:13px;word-break:break-all;color:#0d633f}.error{color:#b42318;font-weight:800;margin-top:10px}@media(max-width:800px){.stats{grid-template-columns:1fr 1fr}.brand{font-size:26px}.wrap{padding:10px}.card{padding:14px}}
-</style></head><body><div class="app"><header class="top"><div class="brand">RODEM ORDER ONE</div><div class="sub">고객 주문 취합 및 로젠 송장 관리 시스템</div><div class="badge">직원관리</div></header><main class="wrap">
-<div class="card"><div class="stats"><div class="stat"><span>전체 주문</span><b id="all">0</b></div><div class="stat"><span>신규 주문</span><b id="new">0</b></div><div class="stat"><span>송장 생성</span><b id="done">0</b></div><div class="stat"><span>총 낱개 수량</span><b id="qty">0</b></div></div></div>
-<div class="card"><div class="toolbar"><button class="btn main" onclick="loadOrders()">새로고침</button><button class="btn main" onclick="exportLogen()">선택 주문 로젠 송장 생성</button><button class="btn" onclick="selectNew()">신규 주문 전체선택</button><button class="btn" onclick="toggleAll()">전체 선택/해제</button><button class="btn" onclick="exportBackup()">주문 백업 엑셀</button></div><div id="error" class="error"></div></div>
-<div class="card"><div class="title">주문 목록</div><div class="desc" id="updated"></div><div class="tablewrap" style="margin-top:14px"><table><thead><tr><th><input type="checkbox" id="head" onchange="toggleAll(this.checked)"></th><th>상태</th><th>주문번호</th><th>접수시간</th><th>업체명</th><th>받는 분</th><th>연락처</th><th>주소</th><th>주문상품</th><th>로젠 상품명</th><th>총수량</th><th>배송 요청사항</th></tr></thead><tbody id="body"></tbody></table></div></div>
-</main></div><script>
-let orders=[];const $=id=>document.getElementById(id);function esc(s){return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}function logen(items){return items.map(i=>'#'+String(i.name).replaceAll('#','')+Number(i.qty)).join('')}
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#13744b">
+<title>RODEM ORDER ONE 직원관리</title>
+<style>
+:root{--green:#168553;--green-dark:#0d5f3b;--green-soft:#edf8f2;--ink:#172033;--muted:#667085;--line:#dce8e1;--bg:#f3f7f5;--warn:#b7791f;--blue:#155eef}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",Arial,sans-serif;color:var(--ink);background:var(--bg)}
+button,input{font:inherit}.mobile-only{display:none}.desktop-app{min-width:1180px;min-height:100vh}
+.top{position:sticky;top:0;z-index:30;background:linear-gradient(120deg,#0b4b31,#168553 60%,#44ad78);color:#fff;box-shadow:0 7px 22px #0d5f3b2e}
+.top-inner{max-width:1800px;margin:auto;padding:20px 28px;display:flex;justify-content:space-between;align-items:center;gap:24px}
+.brand-row{display:flex;align-items:center;gap:14px}.brand-icon{width:48px;height:48px;border-radius:14px;background:#ffffff22;border:1px solid #ffffff40;display:flex;align-items:center;justify-content:center;font-size:25px}.brand{font-size:29px;font-weight:1000;letter-spacing:.3px}.sub{font-size:15px;margin-top:3px;opacity:.9}.top-badge{padding:9px 15px;border-radius:999px;background:#ffffff1c;border:1px solid #ffffff54;font-weight:900}
+.page{max-width:1800px;margin:auto;padding:22px 28px 34px}.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:16px}.stat{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px 20px;box-shadow:0 6px 18px #174b3310}.stat-label{color:var(--muted);font-size:14px;font-weight:800}.stat-value{font-size:34px;font-weight:1000;color:var(--green-dark);margin-top:6px}.stat-unit{font-size:14px;color:var(--muted);margin-left:4px}
+.panel{background:#fff;border:1px solid var(--line);border-radius:17px;box-shadow:0 8px 24px #174b3312;margin-bottom:16px}.toolbar-panel{padding:15px 17px;display:flex;align-items:center;justify-content:space-between;gap:16px}.toolbar{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.btn{height:42px;border:1px solid #b9d6c6;background:#fff;color:#145d3e;border-radius:10px;padding:0 15px;font-size:14px;font-weight:900;cursor:pointer;transition:.15s}.btn:hover{background:#f4faf6;transform:translateY(-1px)}.btn.primary{border:0;background:linear-gradient(135deg,#25a969,#168553);color:#fff;padding:0 18px}.btn.primary:hover{filter:brightness(.97)}.btn.blue{border-color:#b9cdfc;color:#174ea6;background:#f7f9ff}.toolbar-note{font-size:13px;color:var(--muted);white-space:nowrap}.error{font-size:14px;color:#b42318;font-weight:800;margin-left:8px}
+.table-panel{overflow:hidden}.table-head{padding:17px 18px 13px;display:flex;align-items:flex-end;justify-content:space-between;border-bottom:1px solid var(--line)}.title{font-size:21px;font-weight:1000}.desc{font-size:13px;color:var(--muted);margin-top:4px}.tablewrap{overflow:auto;max-height:calc(100vh - 330px)}table{border-collapse:separate;border-spacing:0;width:100%;min-width:1510px}th,td{padding:11px 10px;border-bottom:1px solid #e8efeb;text-align:left;vertical-align:top;font-size:13px;line-height:1.45}th{position:sticky;top:0;z-index:5;background:#eaf6ef;color:#125c3b;font-size:12px;font-weight:1000;white-space:nowrap;border-bottom:1px solid #cfe2d6}tbody tr:hover{background:#f8fbf9}.checkcol{width:42px;text-align:center}.status{display:inline-flex;align-items:center;justify-content:center;min-width:58px;padding:5px 8px;border-radius:999px;font-size:11px;font-weight:1000}.status.new{background:#fff1c2;color:#785600}.status.done{background:#dff4e7;color:#126a40}.order-no{font-family:Consolas,monospace;font-size:12px;color:#344054}.company{font-weight:1000;font-size:14px}.address{min-width:250px;max-width:330px}.items{min-width:210px}.logen{min-width:230px;max-width:310px;font-family:Consolas,"Noto Sans KR",monospace;color:#0d633f;word-break:break-all;background:#f4faf6;border-radius:8px;padding:8px!important}.memo{min-width:170px;max-width:230px}.empty{text-align:center;padding:55px;color:var(--muted);font-size:15px}.updated{text-align:right;font-size:12px;color:var(--muted)}
+.footer-note{font-size:12px;color:var(--muted);padding:0 4px;text-align:right}
+@media(max-width:1023px){body{background:#f5f8f6}.desktop-app{display:none}.mobile-only{display:flex;min-height:100vh;padding:28px;align-items:center;justify-content:center}.mobile-card{width:100%;max-width:440px;background:#fff;border:1px solid var(--line);border-radius:24px;padding:35px 24px;text-align:center;box-shadow:0 16px 45px #174b3320}.mobile-icon{width:78px;height:78px;margin:0 auto 18px;border-radius:23px;background:linear-gradient(135deg,#e5f6ec,#ccebd9);display:flex;align-items:center;justify-content:center;font-size:38px}.mobile-title{font-size:25px;font-weight:1000;color:var(--green-dark)}.mobile-desc{font-size:16px;color:var(--muted);line-height:1.65;margin-top:13px}.mobile-url{margin-top:22px;padding:13px;border-radius:12px;background:#f3f7f5;color:#344054;font-size:13px;word-break:break-all}}
+</style>
+</head>
+<body>
+<div class="mobile-only">
+  <div class="mobile-card">
+    <div class="mobile-icon">🖥️</div>
+    <div class="mobile-title">직원관리 화면은 PC 전용입니다</div>
+    <div class="mobile-desc">주문 취합과 로젠 송장 생성 업무는<br>회사 PC에서 이용해 주세요.</div>
+    <div class="mobile-url">https://rodem-order-one.onrender.com/staff</div>
+  </div>
+</div>
+<div class="desktop-app">
+<header class="top"><div class="top-inner"><div class="brand-row"><div class="brand-icon">🚚</div><div><div class="brand">RODEM ORDER ONE</div><div class="sub">고객 주문 취합 및 로젠 송장 관리 시스템</div></div></div><div class="top-badge">직원관리 · PC 전용</div></div></header>
+<main class="page">
+<section class="summary">
+  <div class="stat"><div class="stat-label">전체 주문</div><div><span class="stat-value" id="all">0</span><span class="stat-unit">건</span></div></div>
+  <div class="stat"><div class="stat-label">신규 주문</div><div><span class="stat-value" id="new">0</span><span class="stat-unit">건</span></div></div>
+  <div class="stat"><div class="stat-label">송장 생성 완료</div><div><span class="stat-value" id="done">0</span><span class="stat-unit">건</span></div></div>
+  <div class="stat"><div class="stat-label">총 낱개 수량</div><div><span class="stat-value" id="qty">0</span><span class="stat-unit">개</span></div></div>
+</section>
+<section class="panel toolbar-panel">
+  <div class="toolbar">
+    <button class="btn primary" onclick="loadOrders()">새로고침</button>
+    <button class="btn primary" onclick="exportLogen()">선택 주문 로젠 송장 생성</button>
+    <button class="btn" onclick="selectNew()">신규 주문 전체선택</button>
+    <button class="btn" onclick="toggleAll()">전체 선택/해제</button>
+    <button class="btn blue" onclick="exportBackup()">주문 백업 엑셀</button>
+    <span id="error" class="error"></span>
+  </div>
+  <div class="toolbar-note">주문은 60초마다 자동 새로고침됩니다.</div>
+</section>
+<section class="panel table-panel">
+  <div class="table-head"><div><div class="title">주문 목록</div><div class="desc">체크한 주문만 로젠 송장 파일로 생성됩니다.</div></div><div id="updated" class="updated"></div></div>
+  <div class="tablewrap"><table><thead><tr>
+    <th class="checkcol"><input type="checkbox" id="head" onchange="toggleAll(this.checked)"></th><th>상태</th><th>주문번호</th><th>접수시간</th><th>업체명</th><th>받는 분</th><th>연락처</th><th>배송지</th><th>주문상품</th><th>로젠 상품명</th><th>총수량</th><th>배송 요청사항</th>
+  </tr></thead><tbody id="body"></tbody></table></div>
+</section>
+<div class="footer-note">RODEM ORDER ONE · 직원관리 시스템</div>
+</main>
+</div>
+<script>
+let orders=[];const $=id=>document.getElementById(id);
+function esc(s){return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function logen(items){return items.map(i=>'#'+String(i.name).replaceAll('#','')+Number(i.qty)).join('')}
 async function loadOrders(){$('error').textContent='';try{let r=await fetch('/api/staff/orders',{cache:'no-store'});if(!r.ok)throw new Error();let d=await r.json();orders=d.orders;render()}catch(e){$('error').textContent='주문 정보를 불러오지 못했습니다.'}}
-function render(){let n=orders.filter(x=>x.status==='신규').length,d=orders.length-n,q=orders.reduce((s,x)=>s+Number(x.total_qty||0),0);$('all').textContent=orders.length;$('new').textContent=n;$('done').textContent=d;$('qty').textContent=q.toLocaleString();$('updated').textContent='마지막 새로고침: '+new Date().toLocaleString();$('body').innerHTML=orders.length?orders.map(o=>`<tr><td><input class="sel" type="checkbox" value="${o.id}"></td><td><span class="status ${o.status==='신규'?'new':'done'}">${esc(o.status)}</span></td><td>${esc(o.order_no)}</td><td>${esc(o.created_at)}</td><td><b>${esc(o.company)}</b></td><td>${esc(o.receiver)}</td><td>${esc(o.phone)}</td><td>${esc((o.postal_code||'')+' '+o.address)}</td><td>${o.items.map(i=>esc(i.name)+' '+Number(i.qty).toLocaleString()+'개').join('<br>')}</td><td class="logen">${esc(logen(o.items))}</td><td><b>${Number(o.total_qty).toLocaleString()}개</b></td><td>${esc(o.memo||'')}</td></tr>`).join(''):`<tr><td colspan="12" class="empty">아직 접수된 주문이 없습니다.</td></tr>`}
-function ids(){return [...document.querySelectorAll('.sel:checked')].map(x=>Number(x.value))}function toggleAll(v){let boxes=[...document.querySelectorAll('.sel')],checked=typeof v==='boolean'?v:!boxes.every(x=>x.checked);boxes.forEach(x=>x.checked=checked);$('head').checked=checked}function selectNew(){document.querySelectorAll('.sel').forEach(x=>{let o=orders.find(y=>y.id===Number(x.value));x.checked=!!(o&&o.status==='신규')})}
+function render(){let n=orders.filter(x=>x.status==='신규').length,d=orders.length-n,q=orders.reduce((s,x)=>s+Number(x.total_qty||0),0);$('all').textContent=orders.length.toLocaleString();$('new').textContent=n.toLocaleString();$('done').textContent=d.toLocaleString();$('qty').textContent=q.toLocaleString();$('updated').textContent='마지막 새로고침: '+new Date().toLocaleString();$('body').innerHTML=orders.length?orders.map(o=>`<tr><td class="checkcol"><input class="sel" type="checkbox" value="${o.id}"></td><td><span class="status ${o.status==='신규'?'new':'done'}">${esc(o.status)}</span></td><td class="order-no">${esc(o.order_no)}</td><td>${esc(o.created_at)}</td><td class="company">${esc(o.company)}</td><td>${esc(o.receiver)}</td><td>${esc(o.phone)}</td><td class="address">${esc((o.postal_code?'('+o.postal_code+') ':'')+o.address)}</td><td class="items">${o.items.map(i=>esc(i.name)+' <b>'+Number(i.qty).toLocaleString()+'개</b>').join('<br>')}</td><td class="logen">${esc(logen(o.items))}</td><td><b>${Number(o.total_qty).toLocaleString()}개</b></td><td class="memo">${esc(o.memo||'')}</td></tr>`).join(''):`<tr><td colspan="12" class="empty">아직 접수된 주문이 없습니다.</td></tr>`}
+function ids(){return [...document.querySelectorAll('.sel:checked')].map(x=>Number(x.value))}
+function toggleAll(v){let boxes=[...document.querySelectorAll('.sel')],checked=typeof v==='boolean'?v:!boxes.every(x=>x.checked);boxes.forEach(x=>x.checked=checked);$('head').checked=checked}
+function selectNew(){document.querySelectorAll('.sel').forEach(x=>{let o=orders.find(y=>y.id===Number(x.value));x.checked=!!(o&&o.status==='신규')});$('head').checked=false}
 async function download(path,body){$('error').textContent='';try{let r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok){let d=await r.json().catch(()=>({}));throw new Error(d.error||'파일 생성에 실패했습니다.')}let b=await r.blob(),dis=r.headers.get('content-disposition')||'',m=dis.match(/filename="?([^";]+)"?/i),name=m?m[1]:'download';let a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);await loadOrders()}catch(e){$('error').textContent=e.message}}
-function exportLogen(){let a=ids();if(!a.length){$('error').textContent='송장을 생성할 주문을 선택해 주세요.';return}download('/api/staff/export-logen',{ids:a})}function exportBackup(){download('/api/staff/export-backup',{})}loadOrders();setInterval(loadOrders,60000);
-</script></body></html>
+function exportLogen(){let a=ids();if(!a.length){$('error').textContent='송장을 생성할 주문을 선택해 주세요.';return}download('/api/staff/export-logen',{ids:a})}
+function exportBackup(){download('/api/staff/export-backup',{})}
+if(window.innerWidth>=1024){loadOrders();setInterval(loadOrders,60000)}
+</script>
+</body>
+</html>
