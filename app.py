@@ -119,16 +119,35 @@ def now_text():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def make_order_no():
-    return "R" + datetime.now().strftime("%y%m%d%H%M%S%f")[:18]
-
-
 def clean_text(value, max_len=200):
     return re.sub(r"[\x00-\x1f\x7f]", " ", str(value or "")).strip()[:max_len]
 
 
 def clean_phone(value):
-    return clean_text(value, 30)
+    raw = clean_text(value, 30)
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 11:
+        return f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
+    if len(digits) == 10:
+        return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+    return raw
+
+
+def normalized_phone(value):
+    return re.sub(r"\D", "", str(value or ""))
+
+
+def make_order_no(session):
+    prefix = datetime.now().strftime("%Y%m%d")
+    rows = session.scalars(
+        select(Order.order_no).where(Order.order_no.like(f"{prefix}-%"))
+    ).all()
+    last = 0
+    for value in rows:
+        match = re.match(rf"^{prefix}-(\d{{4,}})$", str(value or ""))
+        if match:
+            last = max(last, int(match.group(1)))
+    return f"{prefix}-{last + 1:04d}"
 
 
 def customer_to_dict(row):
@@ -160,11 +179,20 @@ def order_to_dict(row):
 
 
 def get_customer():
-    token = request.cookies.get("rodem_customer", "")
+    token = request.cookies.get("rodem_customer", "") or request.headers.get("X-Customer-Token", "")
+    token = clean_text(token, 128)
     if not token:
         return None
     with SessionLocal() as session:
         return session.scalar(select(Customer).where(Customer.token == token))
+
+
+def attach_customer_cookie(response, token):
+    response.set_cookie(
+        "rodem_customer", token, max_age=31536000 * 3,
+        httponly=True, samesite="Lax", secure=request.is_secure,
+    )
+    return response
 
 
 def logen_product_text(items):
@@ -202,7 +230,10 @@ def staff_page():
 @app.get("/api/customer/me")
 def customer_me():
     customer = get_customer()
-    return jsonify(customer=customer_to_dict(customer) if customer else None)
+    return jsonify(
+        customer=customer_to_dict(customer) if customer else None,
+        device_token=customer.token if customer else "",
+    )
 
 
 @app.post("/api/customer/register")
@@ -218,20 +249,50 @@ def register_customer():
     if not values["company"] or not values["receiver"] or not values["phone"] or not values["address"]:
         return jsonify(error="업체명, 받는 분, 연락처, 배송지 주소를 입력해 주세요."), 400
 
-    token = secrets.token_urlsafe(32)
-    customer = Customer(token=token, created_at=now_text(), **values)
+    phone_key = normalized_phone(values["phone"])
     with SessionLocal() as session:
-        session.add(customer)
+        existing = None
+        for row in session.scalars(select(Customer).order_by(Customer.id.desc())).all():
+            if normalized_phone(row.phone) == phone_key and row.company.strip() == values["company"].strip():
+                existing = row
+                break
+        if existing:
+            for key, value in values.items():
+                setattr(existing, key, value)
+            customer = existing
+        else:
+            customer = Customer(token=secrets.token_urlsafe(32), created_at=now_text(), **values)
+            session.add(customer)
         session.commit()
+        session.refresh(customer)
+        payload = customer_to_dict(customer)
+        token = customer.token
 
-    response = make_response(jsonify(customer=customer_to_dict(customer)))
-    response.set_cookie(
-        "rodem_customer", token, max_age=31536000 * 3,
-        httponly=True, samesite="Lax", secure=request.is_secure,
-    )
-    return response
+    response = make_response(jsonify(customer=payload, device_token=token))
+    return attach_customer_cookie(response, token)
 
 
+@app.post("/api/customer/recover")
+def recover_customer():
+    data = request.get_json(silent=True) or {}
+    company = clean_text(data.get("company"), 100)
+    phone_key = normalized_phone(data.get("phone"))
+    if not company or len(phone_key) < 8:
+        return jsonify(error="업체명과 담당자 연락처를 입력해 주세요."), 400
+
+    with SessionLocal() as session:
+        matches = []
+        for row in session.scalars(select(Customer).order_by(Customer.id.desc())).all():
+            if normalized_phone(row.phone) == phone_key and row.company.strip() == company.strip():
+                matches.append(row)
+        if not matches:
+            return jsonify(error="일치하는 저장 정보를 찾지 못했습니다. 처음 등록을 진행해 주세요."), 404
+        customer = matches[0]
+        payload = customer_to_dict(customer)
+        token = customer.token
+
+    response = make_response(jsonify(customer=payload, device_token=token))
+    return attach_customer_cookie(response, token)
 
 
 @app.put("/api/customer/me")
@@ -259,7 +320,7 @@ def update_customer():
             setattr(row, key, value)
         session.commit()
         session.refresh(row)
-        return jsonify(customer=customer_to_dict(row))
+        return jsonify(customer=customer_to_dict(row), device_token=row.token)
 
 
 @app.get("/api/customer/orders")
@@ -304,7 +365,7 @@ def create_order():
 
         total_qty = sum(item["qty"] for item in items)
         row = Order(
-            order_no=make_order_no(), request_id=request_id,
+            order_no=make_order_no(session), request_id=request_id,
             customer_token=customer.token, company=customer.company,
             receiver=customer.receiver, phone=customer.phone,
             postal_code=customer.postal_code or "", address=customer.address,
