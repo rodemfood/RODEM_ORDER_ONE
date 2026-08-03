@@ -176,6 +176,51 @@ def register_customer():
     return response
 
 
+
+
+@app.put("/api/customer/me")
+def update_customer():
+    customer = get_customer()
+    if not customer:
+        return jsonify(error="저장된 고객 정보를 찾을 수 없습니다."), 401
+
+    data = request.get_json(silent=True) or {}
+    values = {
+        "company": clean_text(data.get("company"), 100),
+        "receiver": clean_text(data.get("receiver"), 50),
+        "phone": clean_phone(data.get("phone")),
+        "postal_code": clean_text(data.get("postal_code"), 20),
+        "address": clean_text(data.get("address"), 250),
+    }
+    if not values["company"] or not values["receiver"] or not values["phone"] or not values["address"]:
+        return jsonify(error="업체명, 받는 분, 연락처, 배송지 주소를 입력해 주세요."), 400
+
+    with SessionLocal() as session:
+        row = session.scalar(select(Customer).where(Customer.token == customer.token))
+        if not row:
+            return jsonify(error="저장된 고객 정보를 찾을 수 없습니다."), 404
+        for key, value in values.items():
+            setattr(row, key, value)
+        session.commit()
+        session.refresh(row)
+        return jsonify(customer=customer_to_dict(row))
+
+
+@app.get("/api/customer/orders")
+def customer_orders():
+    customer = get_customer()
+    if not customer:
+        return jsonify(error="저장된 고객 정보를 찾을 수 없습니다."), 401
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(Order)
+            .where(Order.customer_token == customer.token)
+            .order_by(Order.id.desc())
+            .limit(20)
+        ).all()
+        return jsonify(orders=[order_to_dict(row) for row in rows])
+
+
 @app.post("/api/orders")
 def create_order():
     customer = get_customer()
